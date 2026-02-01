@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const cache_line = 64;
+// 128 bytes to handle x86 adjacent-line prefetch (effectively 128-byte coherence unit)
+const cache_line = 128;
 
 const Waiter = struct {
     mutex: std.Thread.Mutex = .{},
@@ -139,14 +140,19 @@ fn RingBuffer(comptime T: type) type {
         }
 
         pub fn consume(self: *Self) ?T {
+            // Fast path - try immediately
             if (self.tryConsume()) |value| {
                 return value;
             }
 
-            if (self.waiter.shutdown) {
-                return null;
+            // Spin briefly (cheaper than futex syscall on Linux)
+            for (0..64) |_| {
+                std.atomic.spinLoopHint();
+                if (self.tryConsume()) |value| return value;
+                if (self.waiter.shutdown) return null;
             }
 
+            // Slow path - park
             self.waiter.wait();
             return self.tryConsume();
         }
