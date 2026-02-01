@@ -9,12 +9,12 @@ const Waiter = struct {
     shutdown: bool = false,
 
     fn wait(self: *Waiter) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        while (!self.shutdown) {
-            self.cond.timedWait(&self.mutex, 1_000_000) catch break; // 1ms
-            break;
+        // Spin with yield instead of condvar - avoids futex syscall overhead on Linux
+        for (0..100) |_| {
+            if (self.shutdown) return;
+            std.atomic.spinLoopHint();
         }
+        std.Thread.yield() catch {};
     }
 
     fn notifyOne(self: *Waiter) void {
