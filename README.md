@@ -35,18 +35,18 @@ zig build run -Doptimize=ReleaseFast  # run benchmarks
 
 | metric     | ziggy     | crossbeam | diff |
 |------------|-----------|-----------|------|
-| throughput | 6.36 M/s  | 6.51 M/s  | -2%  |
-| p50        | 0.060 ms  | 0.046 ms  | -30% |
-| p99        | 0.092 ms  | 0.089 ms  | -4%  |
-| p99.9      | 0.156 ms  | 0.154 ms  | ~0%  |
-| p99.99     | 0.195 ms  | 0.205 ms  | +5%  |
-| p99.999    | 0.853 ms  | 0.551 ms  | -55% |
+| throughput | 6.06 M/s  | 6.36 M/s  | -5%  |
+| p50        | 0.046 ms  | 0.051 ms  | -9%  |
+| p99        | 0.087 ms  | 0.090 ms  | -3%  |
+| p99.9      | 0.151 ms  | 0.157 ms  | -4%  |
+| p99.99     | 0.172 ms  | 0.176 ms  | -2%  |
+| p99.999    | 1.052 ms  | 0.844 ms  | +25% |
 
 ![latency](benchmarks/latency.png)
 
 <img src="benchmarks/throughput.png" width="50%">
 
-crossbeam wins on median latency, ziggy is competitive on throughput and p99.9.
+ziggy wins on latency (p50-p99.99), crossbeam wins on throughput and extreme tail (p99.999).
 
 173 lines of zig vs 639 lines of rust (array.rs only, full crossbeam-channel is 8600+ lines).
 

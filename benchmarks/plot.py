@@ -2,13 +2,13 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Data from 100-run benchmark
+# Data from 100-run benchmark (both using blocking receive)
 latency_metrics = ['p50', 'p99', 'p99.9', 'p99.99', 'p99.999']
-ziggy_latency = [0.060, 0.092, 0.156, 0.195, 0.853]  # in ms
-crossbeam_latency = [0.046, 0.089, 0.154, 0.205, 0.551]  # in ms
+ziggy_latency = [0.046, 0.087, 0.151, 0.172, 1.052]  # in ms
+crossbeam_latency = [0.051, 0.090, 0.157, 0.176, 0.844]  # in ms
 
-throughput_ziggy = 6.36
-throughput_crossbeam = 6.51
+throughput_ziggy = 6.06
+throughput_crossbeam = 6.36
 
 # Latency chart
 fig1, ax1 = plt.subplots(figsize=(10, 5))
