@@ -33,16 +33,18 @@ zig build run -Doptimize=ReleaseFast  # run benchmarks
 
 10P/10C on 20-core machine, 100 runs each:
 
-| metric     | ziggy    | crossbeam | diff |
-|------------|----------|-----------|------|
-| throughput | 6.36 M/s | 6.51 M/s  | -2%  |
-| p50        | 60.0 µs  | 46.2 µs   | -30% |
-| p99        | 92.2 µs  | 88.8 µs   | -4%  |
-| p99.9      | 155.7 µs | 153.9 µs  | ~0%  |
-| p99.99     | 195.1 µs | 205.1 µs  | +5%  |
-| p99.999    | 853.1 µs | 551.3 µs  | -55% |
+| metric     | ziggy     | crossbeam | diff |
+|------------|-----------|-----------|------|
+| throughput | 6.36 M/s  | 6.51 M/s  | -2%  |
+| p50        | 0.060 ms  | 0.046 ms  | -30% |
+| p99        | 0.092 ms  | 0.089 ms  | -4%  |
+| p99.9      | 0.156 ms  | 0.154 ms  | ~0%  |
+| p99.99     | 0.195 ms  | 0.205 ms  | +5%  |
+| p99.999    | 0.853 ms  | 0.551 ms  | -55% |
 
-![comparison](benchmarks/comparison.png)
+![latency](benchmarks/latency.png)
+
+![throughput](benchmarks/throughput.png)
 
 crossbeam wins on median latency, ziggy is competitive on throughput and p99.9.
 
