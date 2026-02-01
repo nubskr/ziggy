@@ -694,8 +694,8 @@ fn runLatencyBenchmark(allocator: std.mem.Allocator, num_producers: u32, num_con
     const elapsed_ms = @divTrunc(end - start, 1_000_000);
 
     std.debug.print("{d}P/{d}C ({d} samples, {d}ms total):\n", .{num_producers, num_consumers, num_samples, elapsed_ms});
-    std.debug.print("  min: {d}ns, avg: {d}ns, p50: {d}ns\n", .{@as(i64, @intCast(min_lat)), @as(i64, @intCast(avg)), @as(i64, @intCast(p50))});
-    std.debug.print("  p99: {d}ns, p99.9: {d}ns, max: {d}ns\n\n", .{@as(i64, @intCast(p99)), @as(i64, @intCast(p999)), @as(i64, @intCast(max_lat))});
+    std.debug.print("  min: {d}µs, avg: {d}µs, p50: {d}µs\n", .{@divTrunc(min_lat, 1000), @divTrunc(avg, 1000), @divTrunc(p50, 1000)});
+    std.debug.print("  p99: {d}µs, p99.9: {d}µs, max: {d}µs\n\n", .{@divTrunc(p99, 1000), @divTrunc(p999, 1000), @divTrunc(max_lat, 1000)});
 }
 
 fn latencyProducer(ring: *BenchRing, count: u32) void {
