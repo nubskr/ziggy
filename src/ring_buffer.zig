@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 
 pub const cache_line = 128;
 
+// Waiter provides a parking mechanism for idle consumers.
+// Instead of spinning forever when the buffer is empty, consumers can park here
+// and get woken up when a producer adds an item. Uses a mutex+condvar internally
+// but the fast path (checking parked_count) is lock-free. The shutdown flag
+// allows clean termination - once set, all waiters wake up and exit.
 const Waiter = struct {
     mutex: std.Thread.Mutex = .{},
     cond: std.Thread.Condition = .{},
@@ -42,7 +47,23 @@ const Waiter = struct {
     }
 };
 
-/// MPMC ring buffer (sequence-per-slot design)
+// MPMC Ring Buffer - Sequence-per-slot design (LMAX Disruptor style)
+//
+// Each slot has its own sequence number that acts as both a lock and a version.
+// Producers and consumers coordinate by comparing head/tail cursors against
+// slot sequences. This avoids a central lock and allows true parallelism.
+//
+// Memory layout uses 128-byte alignment to prevent false sharing on modern CPUs.
+// Head and tail cursors are on separate cache lines, and each slot's sequence
+// is also cache-line aligned.
+//
+// Invariants:
+//   - slot.sequence == head means slot is writable (empty)
+//   - slot.sequence == tail + 1 means slot is readable (has data)
+//   - head - tail <= capacity (buffer never overflows)
+//
+// The sequence numbers wrap around using wrapping arithmetic (+%), which is
+// safe because we only compare for equality, not ordering.
 pub fn RingBuffer(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -64,6 +85,10 @@ pub fn RingBuffer(comptime T: type) type {
         consumed: if (builtin.mode == .Debug) std.atomic.Value(u64) else void =
             if (builtin.mode == .Debug) std.atomic.Value(u64).init(0) else {},
 
+        // Initialize the ring buffer with the given capacity.
+        // Size must be a power of two - this allows us to use bitwise AND for
+        // fast modulo (index & mask instead of index % size). Slots are initialized
+        // with sequence = index, marking them all as "empty and ready for writing".
         pub fn init(allocator: std.mem.Allocator, size: u32) !Self {
             std.debug.assert(size > 0 and (size & (size - 1)) == 0);
 
@@ -85,6 +110,23 @@ pub fn RingBuffer(comptime T: type) type {
             self.* = undefined;
         }
 
+        // Produce a value into the ring buffer (blocking).
+        //
+        // Algorithm:
+        //   1. Load current head position (where we want to write)
+        //   2. Check if slot.sequence == head (slot is empty and ready)
+        //   3. CAS head to head+1 to claim the slot
+        //   4. Write value, then set slot.sequence = head+1 to publish
+        //
+        // Memory ordering:
+        //   - Load head with monotonic (just need current value)
+        //   - Load sequence with acquire (sync with consumer's release)
+        //   - Store sequence with release (publish data to consumers)
+        //
+        // Backoff strategy:
+        //   - On CAS failure: immediately retry (contention, slot likely still valid)
+        //   - On sequence mismatch: spin with hints, yield after 256 spins
+        //   - Never blocks - will eventually succeed as consumers drain the buffer
         pub fn produce(self: *Self, value: T) void {
             var spin_count: u8 = 0;
             while (true) {
@@ -114,11 +156,26 @@ pub fn RingBuffer(comptime T: type) type {
             }
         }
 
+        // Close the buffer for graceful shutdown.
+        // Sets shutdown flag and wakes all parked consumers so they can exit.
+        // Consumers will drain remaining items then return null.
         pub fn close(self: *Self) void {
             @atomicStore(bool, &self.shutdown, true, .release);
             self.consumer_waiter.close();
         }
 
+        // Try to consume a value (non-blocking).
+        // Returns null immediately if buffer is empty or on contention.
+        //
+        // Algorithm:
+        //   1. Load current tail position (where we want to read)
+        //   2. Check if slot.sequence == tail+1 (slot has data ready)
+        //   3. CAS tail to tail+1 to claim the slot
+        //   4. Read value, then set slot.sequence = tail+mask+1 to free slot
+        //
+        // The final sequence value (tail + mask + 1) is carefully chosen:
+        // it equals the head value that will next want to write to this slot,
+        // effectively marking it as empty for the next producer cycle.
         pub fn tryConsume(self: *Self) ?T {
             const tail = @atomicLoad(u64, &self.tail, .monotonic);
             const slot = &self.slots[tail & self.mask];
@@ -138,6 +195,17 @@ pub fn RingBuffer(comptime T: type) type {
             return null;
         }
 
+        // Consume a value (blocking).
+        // Returns null only when the buffer is closed and empty.
+        //
+        // Three-phase wait strategy:
+        //   1. Fast path: try once, return immediately if successful
+        //   2. Spin phase: try 16 times with spin hints (good for short waits)
+        //   3. Park phase: sleep on condvar until producer signals
+        //
+        // This graduated approach optimizes for the common case (data available)
+        // while avoiding CPU waste during idle periods. The spin phase catches
+        // cases where a producer is just about to publish.
         pub fn consume(self: *Self) ?T {
             if (self.tryConsume()) |v| {
                 @branchHint(.likely);
