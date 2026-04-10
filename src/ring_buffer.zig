@@ -106,7 +106,7 @@ pub fn RingBuffer(comptime T: type) type {
         //   - Never blocks - will eventually succeed as consumers drain the buffer
         pub fn produce(self: *Self, value: T) void {
             var spin_count: u8 = 0;
-            while (true) {
+            while (!@atomicLoad(bool, &self.shutdown, .acquire)) {
                 const head = @atomicLoad(u64, &self.head, .monotonic);
                 const slot = &self.slots[head & self.mask];
                 const seq = @atomicLoad(u64, &slot.sequence, .acquire);
@@ -237,8 +237,12 @@ pub fn RingBuffer(comptime T: type) type {
 const TestValue = struct {
     producer_id: u32,
     seq: u32,
-    fn encode(producer_id: u32, seq: u32) u64 { return (@as(u64, producer_id) << 32) | seq; }
-    fn decode(val: u64) TestValue { return .{ .producer_id = @intCast(val >> 32), .seq = @intCast(val & 0xFFFFFFFF) }; }
+    fn encode(producer_id: u32, seq: u32) u64 {
+        return (@as(u64, producer_id) << 32) | seq;
+    }
+    fn decode(val: u64) TestValue {
+        return .{ .producer_id = @intCast(val >> 32), .seq = @intCast(val & 0xFFFFFFFF) };
+    }
 };
 
 const TestRing = RingBuffer(u64);
@@ -300,7 +304,7 @@ test "multiple producers single consumer" {
                     r.produce(TestValue.encode(pid, @intCast(i)));
                 }
             }
-        }.run, .{&ring, @as(u32, @intCast(p))});
+        }.run, .{ &ring, @as(u32, @intCast(p)) });
     }
 
     // Track what we received per producer
@@ -359,13 +363,18 @@ test "multiple producers multiple consumers" {
                     r.produce(unique_id);
                 }
             }
-        }.run, .{&ring, @as(u32, @intCast(p))});
+        }.run, .{ &ring, @as(u32, @intCast(p)) });
     }
 
     // Start consumers
     for (0..num_consumers) |c| {
         consumers[c] = try std.Thread.spawn(.{}, struct {
-            fn run(r: *TestRing, flags: []std.atomic.Value(bool), count: *std.atomic.Value(usize), total_items: usize) void {
+            fn run(
+                r: *TestRing,
+                flags: []std.atomic.Value(bool),
+                count: *std.atomic.Value(usize),
+                total_items: usize,
+            ) void {
                 while (count.load(.monotonic) < total_items) {
                     if (r.tryConsume()) |val| {
                         const idx = @as(usize, @intCast(val));
@@ -380,7 +389,7 @@ test "multiple producers multiple consumers" {
                     }
                 }
             }
-        }.run, .{&ring, consumed_flags, &consumed_count, total});
+        }.run, .{ &ring, consumed_flags, &consumed_count, total });
     }
 
     // Wait for all
@@ -429,7 +438,13 @@ fn fuzzInput(_: @TypeOf(.{}), input: []const u8) !void {
     try fuzzTestWithParams(std.testing.allocator, ring_size, num_producers, num_consumers, items_per_producer);
 }
 
-fn fuzzTestWithParams(allocator: std.mem.Allocator, ring_size: u32, num_producers: u8, num_consumers: u8, items_per_producer: u32) !void {
+fn fuzzTestWithParams(
+    allocator: std.mem.Allocator,
+    ring_size: u32,
+    num_producers: u8,
+    num_consumers: u8,
+    items_per_producer: u32,
+) !void {
     const total: usize = @as(usize, num_producers) * items_per_producer;
 
     var ring = try TestRing.init(allocator, ring_size);
@@ -461,7 +476,13 @@ fn fuzzTestWithParams(allocator: std.mem.Allocator, ring_size: u32, num_producer
     // Start consumers
     for (0..num_consumers) |c| {
         consumers[c] = try std.Thread.spawn(.{}, struct {
-            fn run(r: *TestRing, flags: []std.atomic.Value(bool), count: *std.atomic.Value(usize), total_items: usize, err: *std.atomic.Value(bool)) void {
+            fn run(
+                r: *TestRing,
+                flags: []std.atomic.Value(bool),
+                count: *std.atomic.Value(usize),
+                total_items: usize,
+                err: *std.atomic.Value(bool),
+            ) void {
                 while (count.load(.monotonic) < total_items and !err.load(.monotonic)) {
                     if (r.tryConsume()) |val| {
                         const idx = @as(usize, @intCast(val));
@@ -506,8 +527,10 @@ fn fuzzTest(allocator: std.mem.Allocator, seed: u64) !void {
     const items_per_producer = random.intRangeAtMost(u32, 100, 5000);
     const total: usize = @as(usize, num_producers) * items_per_producer;
 
-    std.debug.print("\nFuzz: ring_size={}, {}P/{}C, {} items each, {} total\n",
-        .{ring_size, num_producers, num_consumers, items_per_producer, total});
+    std.debug.print(
+        "\nFuzz: ring_size={}, {}P/{}C, {} items each, {} total\n",
+        .{ ring_size, num_producers, num_consumers, items_per_producer, total },
+    );
 
     var ring = try TestRing.init(allocator, ring_size);
     defer ring.deinit();
@@ -533,19 +556,24 @@ fn fuzzTest(allocator: std.mem.Allocator, seed: u64) !void {
                     r.produce(unique_id);
                 }
             }
-        }.run, .{&ring, p, items_per_producer, items_per_producer});
+        }.run, .{ &ring, p, items_per_producer, items_per_producer });
     }
 
     // Start consumers
     for (0..num_consumers) |c| {
         consumers[c] = try std.Thread.spawn(.{}, struct {
-            fn run(r: *TestRing, flags: []std.atomic.Value(bool), count: *std.atomic.Value(usize),
-                   total_items: usize, err: *std.atomic.Value(bool)) void {
+            fn run(
+                r: *TestRing,
+                flags: []std.atomic.Value(bool),
+                count: *std.atomic.Value(usize),
+                total_items: usize,
+                err: *std.atomic.Value(bool),
+            ) void {
                 while (count.load(.monotonic) < total_items and !err.load(.monotonic)) {
                     if (r.tryConsume()) |val| {
                         const idx = @as(usize, @intCast(val));
                         if (idx >= flags.len) {
-                            std.debug.print("OUT OF BOUNDS: {} >= {}\n", .{idx, flags.len});
+                            std.debug.print("OUT OF BOUNDS: {} >= {}\n", .{ idx, flags.len });
                             err.store(true, .release);
                             return;
                         }
@@ -559,7 +587,7 @@ fn fuzzTest(allocator: std.mem.Allocator, seed: u64) !void {
                     }
                 }
             }
-        }.run, .{&ring, consumed_flags, &consumed_count, total, &error_flag});
+        }.run, .{ &ring, consumed_flags, &consumed_count, total, &error_flag });
     }
 
     for (producers) |p| p.join();
